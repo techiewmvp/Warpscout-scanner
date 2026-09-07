@@ -2,9 +2,9 @@ name: Auto Generate WARP Config
 
 on:
   schedule:
-    # 每天 UTC 时间 00:00 与 12:00 自动运行 (北京时间 08:00 与 20:00)
-    - cron: '0 0,12 * * *'
-  workflow_dispatch: # 支持手动点击一键运行
+    # 建议每 4 小时运行一次，因为 Opera 凭据通常 4 小时过期
+    - cron: '0 */4 * * *'
+  workflow_dispatch: # 支持手动点击随时运行
 
 permissions:
   contents: write
@@ -22,24 +22,36 @@ jobs:
         with:
           python-version: '3.x'
 
-      - name: 下载并安装 warpscout
+      - name: 安装 warpscout
         run: |
           curl -fsSL https://raw.githubusercontent.com/vernette/warpscout/master/install.sh | sh
           warpscout version
 
+      - name: 下载 opera-proxy 落地采集工具
+        run: |
+          set -euo pipefail
+          VER=$(curl -sL https://api.github.com/repos/snawoot-proxies-forks/opera-proxy/releases/latest | jq -r '.tag_name')
+          curl -sL -o opera-proxy "https://github.com/snawoot-proxies-forks/opera-proxy/releases/download/${VER}/opera-proxy.linux-amd64"
+          chmod +x opera-proxy
+
       - name: 注册 Cloudflare WARP 凭据
         run: |
+          # 注册生成 best-mihomo.yaml 模板
           warpscout register
-
-      - name: 扫描 MASQUE-H2 端点 (宽度采样)
-        run: |
-          # 提高单子网采样数到 25，使用 visa.cn 确保探测通畅
-          warpscout scan -p masque-h2 -masque-sni www.visa.cn -n 25 \
+          warpscout scan -p masque-h2 -masque-sni www.apple.com -n 1 \
             -o scan-report.txt \
             -conf best-mihomo.yaml \
             -conf-type mihomo
 
-      - name: 执行增强解析与多策略组装 (同级目录输出)
+      - name: 获取 Opera 免费代理凭据与多国落地
+        run: |
+          set -euo pipefail
+          # 运行 opera-proxy 获取三个大区的真实落地和临时账号
+          ./opera-proxy -country AS -list-proxies > opera_as.txt || true
+          ./opera-proxy -country EU -list-proxies > opera_eu.txt || true
+          ./opera-proxy -country AM -list-proxies > opera_am.txt || true
+
+      - name: 执行终极套娃融合解析
         run: |
           python generate_sub.py
 
@@ -48,12 +60,11 @@ jobs:
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           
-          # 只将最终的 warp.yaml 提交推送到仓库
           git add warp.yaml
           
           if git diff --staged --quiet; then
             echo "配置无变化，无需推送。"
           else
-            git commit -m "Auto update warp.yaml with advanced routing and multi-SNI [skip ci]"
+            git commit -m "Auto update warp.yaml with Opera over MASQUE [skip ci]"
             git push
           fi
