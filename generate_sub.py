@@ -26,7 +26,7 @@ public_key = get_val("public-key")
 ip = get_val("ip")
 ipv6 = get_val("ipv6")
 
-# 2. 读取本地优选的极速穿透端点 (endpoints.txt)
+# 2. 读取本地端点
 target_endpoints = []
 if os.path.exists(TXT_PATH):
     print(f"[INFO] 载入本地优选端点池: {TXT_PATH}")
@@ -83,7 +83,7 @@ opera_regions = {
     "美洲": parse_opera("opera_am.txt", "美洲")
 }
 
-# 4. 组装代理节点
+# 4. 组装代理底座
 underlying_proxies = []
 underlying_names = []
 
@@ -129,7 +129,7 @@ for region, landings in opera_regions.items():
                 f"skip-cert-verify: false, dialer-proxy: '{base_name}'}}"
             )
 
-# 5. 构建完整 YAML 配置（引入网友成熟的 Sniffer 与 精准分流 DNS 策略）
+# 5. 构建完整 YAML 配置（完美补齐 DNS 与嗅探补丁）
 yaml_lines = [
     "mixed-port: 7890",
     "allow-lan: false",
@@ -139,7 +139,6 @@ yaml_lines = [
     "unified-delay: true",
     "tcp-concurrent: true",
     "",
-    "# 开启嗅探，防止访问 Google / Gemini 时因 CDN 调度或 FakeIP 导致分流脱轨",
     "sniffer:",
     "  enable: true",
     "  sniff:",
@@ -148,12 +147,20 @@ yaml_lines = [
     "      override-destination: true",
     "    TLS:",
     "      ports: [443, 8443]",
+    "  skip-domain:",
+    "    - '+.push.apple.com'",
+    "    - '+.apple.com'",
     "",
     "dns:",
     "  enable: true",
     "  ipv6: false",
     "  enhanced-mode: fake-ip",
     "  fake-ip-range: 198.18.0.1/16",
+    "  fake-ip-filter:",
+    "    - '+.lan'",
+    "    - '+.local'",
+    "    - '*.msftconnecttest.com'",
+    "    - '*.msftncsi.com'",
     "  default-nameserver:",
     "    - 223.5.5.5",
     "    - 119.29.29.29",
@@ -180,7 +187,7 @@ yaml_lines.extend([
     "    type: select",
     "    proxies:",
     "      - ⚡ WARP极速优选",
-    "      - 🤖 人工智能套娃",
+    "      - 🤖 人工智能",
     "      - DIRECT",
 ] + [f"      - '{name}'" for name in underlying_names] + [
     "",
@@ -193,14 +200,14 @@ yaml_lines.extend([
     "    proxies:"
 ] + [f"      - '{name}'" for name in underlying_names] + [
     "",
+    "  # 【AI专用组】针对 Gemini，首选美洲和欧洲，亚洲因为风控靠后",
     "  - name: 🤖 人工智能",
     "    type: select",
     "    proxies:",
-    "      - 🤖 人工智能套娃",
     "      - 🗽 美洲线路",
     "      - 🌍 欧洲线路",
+    "      - 🤖 人工智能套娃",
     "      - ⚡ 亚洲线路",
-    "      - ⚡ WARP极速优选",
     "",
     "  - name: 🤖 人工智能套娃",
     "    type: url-test",
@@ -254,26 +261,26 @@ yaml_lines.extend([
     ""
 ])
 
-# 7. 全场景高精分流规则（重点修复：阻断 QUIC 并补全 Gemini 规则）
+# 7. 全场景高精分流规则（防止出口IP分裂）
 yaml_lines.extend([
     "rules:",
-    "  # 【最核心修复】阻断 UDP 443 (QUIC)，防止浏览器尝试 HTTP/3 连接导致 Gemini 转圈白屏",
+    "  # 1. 【彻底阻断 QUIC】避免走 UDP 导致握手死锁",
     "  - AND,((DST-PORT,443),(NETWORK,UDP)),REJECT",
     "",
     "  - GEOIP,private,DIRECT,no-resolve",
     "  - GEOIP,lan,DIRECT,no-resolve",
     "",
-    "  # 1. 规避 BT/P2P 下载",
+    "  # 规避 BT/P2P 下载",
     "  - PROCESS-NAME,qbittorrent.exe,DIRECT",
     "  - PROCESS-NAME,Thunder.exe,DIRECT",
     "  - DST-PORT,6881-6889,DIRECT",
     "  - DST-PORT,123,DIRECT",
     "  - DST-PORT,53,DIRECT",
     "",
-    "  # 2. 广告拦截",
+    "  # 广告拦截",
     "  - GEOSITE,category-ads-all,🛑 广告拦截",
     "",
-    "  # 3. 【核心修复】Gemini 与 Google AI 完整生态全域名强制走套娃",
+    "  # 2. 【核心修复】Gemini 依赖的 Google 会话和鉴权域，必须统一走【🤖 人工智能】，防止 IP 分裂",
     "  - DOMAIN-SUFFIX,bard.google.com,🤖 人工智能",
     "  - DOMAIN-SUFFIX,gemini.google.com,🤖 人工智能",
     "  - DOMAIN-SUFFIX,aistudio.google.com,🤖 人工智能",
@@ -283,42 +290,45 @@ yaml_lines.extend([
     "  - DOMAIN-SUFFIX,deepmind.google,🤖 人工智能",
     "  - DOMAIN-SUFFIX,generativelanguage.googleapis.com,🤖 人工智能",
     "  - DOMAIN-SUFFIX,alkalimakersuite-pa.googleapis.com,🤖 人工智能",
+    "  - DOMAIN-SUFFIX,proactivebackend-pa.googleapis.com,🤖 人工智能",
+    "  - DOMAIN-SUFFIX,apis.google.com,🤖 人工智能",
+    "  - DOMAIN-KEYWORD,alkali,🤖 人工智能",
     "  - DOMAIN-KEYWORD,gemini,🤖 人工智能",
     "  - DOMAIN-KEYWORD,bard,🤖 人工智能",
     "  - DOMAIN-KEYWORD,colab,🤖 人工智能",
     "",
-    "  # OpenAI / ChatGPT -> 走套娃",
+    "  # OpenAI / ChatGPT",
     "  - GEOSITE,openai,🤖 人工智能",
     "  - DOMAIN-SUFFIX,chatgpt.com,🤖 人工智能",
     "  - DOMAIN-SUFFIX,oaistatic.com,🤖 人工智能",
     "  - DOMAIN-SUFFIX,oaiusercontent.com,🤖 人工智能",
     "",
-    "  # Claude -> 走套娃",
+    "  # Claude",
     "  - GEOSITE,anthropic,🤖 人工智能",
     "  - DOMAIN-SUFFIX,claude.ai,🤖 人工智能",
     "",
-    "  # 4. Google 基础底层依赖（走代理，防污染）",
+    "  # 3. 普通 Google 搜索/生态服务（走默认代理）",
     "  - DOMAIN-SUFFIX,googleapis.com,🚀 默认代理",
     "  - DOMAIN-SUFFIX,gstatic.com,🚀 默认代理",
     "  - DOMAIN-SUFFIX,google.com,🚀 默认代理",
     "  - DOMAIN-SUFFIX,googleusercontent.com,🚀 默认代理",
     "",
-    "  # 5. 海外媒体",
+    "  # 4. 海外媒体",
     "  - GEOSITE,youtube,📺 国际媒体",
     "  - GEOSITE,netflix,📺 国际媒体",
     "  - GEOSITE,spotify,📺 国际媒体",
     "",
-    "  # 6. 大陆直连白名单",
+    "  # 5. 大陆直连白名单",
     "  - GEOSITE,cn,DIRECT",
     "  - GEOSITE,category-games@cn,DIRECT",
     "  - GEOIP,CN,DIRECT",
     "",
-    "  # 7. 兜底策略",
+    "  # 6. 兜底走纯 WARP 极速直连",
     "  - MATCH,🚀 默认代理"
 ])
 
 with open(OUTPUT_PATH, "w", encoding="utf-8") as f:
     f.write("\n".join(yaml_lines))
 
-print(f"[OK] 修复完毕：成功注入 QUIC 阻断、Sniffer 嗅探及 Gemini 完整规则！")
+print(f"[OK] 成功更新配置！防 IP 分裂逻辑已启用，美洲/欧洲优先！")
 print(f"[OK] 文件已更新至: {OUTPUT_PATH}")
