@@ -44,7 +44,6 @@ if not target_endpoints:
         "162.159.198.187:1701", "162.159.198.214:8095"
     ]
 
-# 取前 8 个作为穿透底座
 target_endpoints = target_endpoints[:8]
 
 # 3. 解析 Opera 落地节点信息
@@ -113,7 +112,7 @@ for idx, ep in enumerate(target_endpoints, 1):
         ""
     ])
 
-# 笛卡尔积组合套娃节点（仅备用于 AI 组）
+# 笛卡尔积组合套娃节点
 combo_proxies = []
 region_groups = {"亚洲": [], "欧洲": [], "美洲": []}
 
@@ -130,35 +129,53 @@ for region, landings in opera_regions.items():
                 f"skip-cert-verify: false, dialer-proxy: '{base_name}'}}"
             )
 
-# 5. 构建完整 YAML 配置
+# 5. 构建完整 YAML 配置（引入网友成熟的 Sniffer 与 精准分流 DNS 策略）
 yaml_lines = [
     "mixed-port: 7890",
     "allow-lan: false",
     "mode: rule",
     "log-level: info",
-    "",
+    "ipv6: false",
+    "unified-delay: true",
     "tcp-concurrent: true",
-    "global-client-fingerprint: chrome",
+    "",
+    "# 开启嗅探，防止访问 Google / Gemini 时因 CDN 调度或 FakeIP 导致分流脱轨",
+    "sniffer:",
+    "  enable: true",
+    "  sniff:",
+    "    HTTP:",
+    "      ports: [80, 8080-8880]",
+    "      override-destination: true",
+    "    TLS:",
+    "      ports: [443, 8443]",
     "",
     "dns:",
     "  enable: true",
     "  ipv6: false",
     "  enhanced-mode: fake-ip",
     "  fake-ip-range: 198.18.0.1/16",
-    "  nameserver:",
+    "  default-nameserver:",
     "    - 223.5.5.5",
     "    - 119.29.29.29",
-    "  fallback:",
-    "    - 1.1.1.1",
+    "  nameserver:",
+    "    - https://223.5.5.5/dns-query",
+    "    - https://1.12.12.12/dns-query",
+    "  proxy-server-nameserver:",
+    "    - https://223.5.5.5/dns-query",
+    "  nameserver-policy:",
+    "    'geosite:cn,private':",
+    "      - https://223.5.5.5/dns-query",
+    "    'geosite:geolocation-!cn':",
+    "      - https://1.1.1.1/dns-query",
+    "      - https://8.8.8.8/dns-query",
     "",
     "proxies:"
 ] + underlying_proxies + combo_proxies
 
-# 6. 精细化策略组架构（核心改动：日常走纯 WARP，AI 走套娃）
+# 6. 精细化策略组架构
 yaml_lines.extend([
     "",
     "proxy-groups:",
-    "  # 主选择器：默认走纯 WARP 自动优选，享受百兆极限速度",
     "  - name: 🚀 默认代理",
     "    type: select",
     "    proxies:",
@@ -167,7 +184,6 @@ yaml_lines.extend([
     "      - DIRECT",
 ] + [f"      - '{name}'" for name in underlying_names] + [
     "",
-    "  # 纯 WARP 自动优选（油管4K、网页浏览、下载默认走这个，速度最快）",
     "  - name: ⚡ WARP极速优选",
     "    type: url-test",
     "    url: https://www.cloudflare.com/cdn-cgi/trace",
@@ -177,14 +193,13 @@ yaml_lines.extend([
     "    proxies:"
 ] + [f"      - '{name}'" for name in underlying_names] + [
     "",
-    "  # 【专属套娃组】给 ChatGPT、Gemini 等 AI 专属定制，解决风控",
     "  - name: 🤖 人工智能",
     "    type: select",
     "    proxies:",
-    "      - 🤖 人工智能套娃", # 默认自动选优的套娃
-    "      - ⚡ 亚洲线路",
+    "      - 🤖 人工智能套娃",
     "      - 🗽 美洲线路",
     "      - 🌍 欧洲线路",
+    "      - ⚡ 亚洲线路",
     "      - ⚡ WARP极速优选",
     "",
     "  - name: 🤖 人工智能套娃",
@@ -194,18 +209,9 @@ yaml_lines.extend([
     "    tolerance: 50",
     "    lazy: true",
     "    proxies:",
-    "      - ⚡ 亚洲线路",
     "      - 🗽 美洲线路",
     "      - 🌍 欧洲线路",
-    "",
-    "  - name: ⚡ 亚洲线路",
-    "    type: url-test",
-    "    url: http://www.gstatic.com/generate_204",
-    "    interval: 300",
-    "    tolerance: 50",
-    "    lazy: true",
-    "    proxies:"
-] + [f"      - '{name}'" for name in region_groups["亚洲"]] + [
+    "      - ⚡ 亚洲线路",
     "",
     "  - name: 🗽 美洲线路",
     "    type: url-test",
@@ -225,6 +231,15 @@ yaml_lines.extend([
     "    proxies:"
 ] + [f"      - '{name}'" for name in region_groups["欧洲"]] + [
     "",
+    "  - name: ⚡ 亚洲线路",
+    "    type: url-test",
+    "    url: http://www.gstatic.com/generate_204",
+    "    interval: 300",
+    "    tolerance: 50",
+    "    lazy: true",
+    "    proxies:"
+] + [f"      - '{name}'" for name in region_groups["亚洲"]] + [
+    "",
     "  - name: 📺 国际媒体",
     "    type: select",
     "    proxies:",
@@ -239,9 +254,12 @@ yaml_lines.extend([
     ""
 ])
 
-# 7. 全场景高精分流规则（彻底封堵 Gemini / Google 漏网之鱼）
+# 7. 全场景高精分流规则（重点修复：阻断 QUIC 并补全 Gemini 规则）
 yaml_lines.extend([
     "rules:",
+    "  # 【最核心修复】阻断 UDP 443 (QUIC)，防止浏览器尝试 HTTP/3 连接导致 Gemini 转圈白屏",
+    "  - AND,((DST-PORT,443),(NETWORK,UDP)),REJECT",
+    "",
     "  - GEOIP,private,DIRECT,no-resolve",
     "  - GEOIP,lan,DIRECT,no-resolve",
     "",
@@ -255,8 +273,10 @@ yaml_lines.extend([
     "  # 2. 广告拦截",
     "  - GEOSITE,category-ads-all,🛑 广告拦截",
     "",
-    "  # 3. 【核心修复】Gemini 与 Google AI 全生态 -> 强制走套娃",
+    "  # 3. 【核心修复】Gemini 与 Google AI 完整生态全域名强制走套娃",
+    "  - DOMAIN-SUFFIX,bard.google.com,🤖 人工智能",
     "  - DOMAIN-SUFFIX,gemini.google.com,🤖 人工智能",
+    "  - DOMAIN-SUFFIX,aistudio.google.com,🤖 人工智能",
     "  - DOMAIN-SUFFIX,ai.google.dev,🤖 人工智能",
     "  - DOMAIN-SUFFIX,makersuite.google.com,🤖 人工智能",
     "  - DOMAIN-SUFFIX,deepmind.com,🤖 人工智能",
@@ -265,6 +285,7 @@ yaml_lines.extend([
     "  - DOMAIN-SUFFIX,alkalimakersuite-pa.googleapis.com,🤖 人工智能",
     "  - DOMAIN-KEYWORD,gemini,🤖 人工智能",
     "  - DOMAIN-KEYWORD,bard,🤖 人工智能",
+    "  - DOMAIN-KEYWORD,colab,🤖 人工智能",
     "",
     "  # OpenAI / ChatGPT -> 走套娃",
     "  - GEOSITE,openai,🤖 人工智能",
@@ -276,28 +297,28 @@ yaml_lines.extend([
     "  - GEOSITE,anthropic,🤖 人工智能",
     "  - DOMAIN-SUFFIX,claude.ai,🤖 人工智能",
     "",
-    "  # 4. 【核心修复】强制 Google 基础依赖走代理，禁止走 DIRECT 直连",
+    "  # 4. Google 基础底层依赖（走代理，防污染）",
     "  - DOMAIN-SUFFIX,googleapis.com,🚀 默认代理",
     "  - DOMAIN-SUFFIX,gstatic.com,🚀 默认代理",
     "  - DOMAIN-SUFFIX,google.com,🚀 默认代理",
     "  - DOMAIN-SUFFIX,googleusercontent.com,🚀 默认代理",
     "",
-    "  # 5. 常见海外媒体",
+    "  # 5. 海外媒体",
     "  - GEOSITE,youtube,📺 国际媒体",
     "  - GEOSITE,netflix,📺 国际媒体",
     "  - GEOSITE,spotify,📺 国际媒体",
     "",
-    "  # 6. 大陆直连白名单（排除掉 Google 依赖后才走直连）",
+    "  # 6. 大陆直连白名单",
     "  - GEOSITE,cn,DIRECT",
     "  - GEOSITE,category-games@cn,DIRECT",
     "  - GEOIP,CN,DIRECT",
     "",
-    "  # 7. 兜底走纯 WARP 极速直连",
+    "  # 7. 兜底策略",
     "  - MATCH,🚀 默认代理"
 ])
 
 with open(OUTPUT_PATH, "w", encoding="utf-8") as f:
     f.write("\n".join(yaml_lines))
 
-print(f"[OK] 成功应用高精分流：普通流量走纯 WARP 极速直连，仅 AI 服务走 Opera 套娃！")
+print(f"[OK] 修复完毕：成功注入 QUIC 阻断、Sniffer 嗅探及 Gemini 完整规则！")
 print(f"[OK] 文件已更新至: {OUTPUT_PATH}")
