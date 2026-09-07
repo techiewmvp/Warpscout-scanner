@@ -38,14 +38,13 @@ if os.path.exists(TXT_PATH):
                 if m and m.group(1) not in target_endpoints:
                     target_endpoints.append(m.group(1))
 
-# 如果没有，默认给一组官方高质量端点兜底
 if not target_endpoints:
     target_endpoints = [
         "162.159.199.144:4443", "162.159.198.88:8443",
         "162.159.198.187:1701", "162.159.198.214:8095"
     ]
 
-# 限制穿透端点数量，避免笛卡尔积组合膨胀太多
+# 取前 8 个作为穿透底座
 target_endpoints = target_endpoints[:8]
 
 # 3. 解析 Opera 落地节点信息
@@ -85,14 +84,14 @@ opera_regions = {
     "美洲": parse_opera("opera_am.txt", "美洲")
 }
 
-# 4. 组装代理节点（第一层 MASQUE 基础通道 + 第二层 Opera 套娃节点）
+# 4. 组装代理节点
 underlying_proxies = []
 underlying_names = []
 
 for idx, ep in enumerate(target_endpoints, 1):
     host, port = ep.split(":")
     assigned_sni = SNI_POOL[(idx - 1) % len(SNI_POOL)]
-    name = f"底座-H2-{idx:02d}"
+    name = f"WARP直连-{idx:02d}"
     underlying_names.append(name)
     underlying_proxies.extend([
         f"  - name: '{name}'",
@@ -114,14 +113,13 @@ for idx, ep in enumerate(target_endpoints, 1):
         ""
     ])
 
-# 笛卡尔积组合套娃节点
+# 笛卡尔积组合套娃节点（仅备用于 AI 组）
 combo_proxies = []
 region_groups = {"亚洲": [], "欧洲": [], "美洲": []}
 
 for region, landings in opera_regions.items():
     if not landings:
         continue
-    # 取前 2 个落地服务器
     for land in landings[:2]:
         for base_name in underlying_names:
             c_name = f"{land['tag']}@{base_name}"
@@ -156,49 +154,21 @@ yaml_lines = [
     "proxies:"
 ] + underlying_proxies + combo_proxies
 
-# 6. 策略组结构（支持选大区、支持自动优选、支持随时切回大带宽纯 WARP）
+# 6. 精细化策略组架构（核心改动：日常走纯 WARP，AI 走套娃）
 yaml_lines.extend([
     "",
     "proxy-groups:",
+    "  # 主选择器：默认走纯 WARP 自动优选，享受百兆极限速度",
     "  - name: 🚀 默认代理",
     "    type: select",
     "    proxies:",
-    "      - ⚡ 自动优选",
-    "      - ⚡ 亚洲线路",
-    "      - 🌍 欧洲线路",
-    "      - 🗽 美洲线路",
-    "      - 🚀 WARP极速直连",
+    "      - ⚡ WARP极速优选",
+    "      - 🤖 人工智能套娃",
     "      - DIRECT",
+] + [f"      - '{name}'" for name in underlying_names] + [
     "",
-    "  - name: ⚡ 自动优选",
-    "    type: url-test",
-    "    url: http://www.gstatic.com/generate_204",
-    "    interval: 300",
-    "    tolerance: 50",
-    "    lazy: true",
-    "    proxies:",
-    "      - ⚡ 亚洲线路",
-    "      - 🌍 欧洲线路",
-    "      - 🗽 美洲线路",
-    "      - 🚀 WARP极速直连",
-    "",
-    "  - name: 🤖 人工智能",
-    "    type: select",
-    "    proxies:",
-    "      - ⚡ 亚洲线路",
-    "      - 🗽 美洲线路",
-    "      - 🌍 欧洲线路",
-    "      - 🚀 默认代理",
-    "",
-    "  - name: 📺 国际媒体",
-    "    type: select",
-    "    proxies:",
-    "      - ⚡ 亚洲线路",
-    "      - 🗽 美洲线路",
-    "      - 🌍 欧洲线路",
-    "      - 🚀 默认代理",
-    "",
-    "  - name: 🚀 WARP极速直连",
+    "  # 纯 WARP 自动优选（油管4K、网页浏览、下载默认走这个，速度最快）",
+    "  - name: ⚡ WARP极速优选",
     "    type: url-test",
     "    url: https://www.cloudflare.com/cdn-cgi/trace",
     "    interval: 300",
@@ -206,6 +176,27 @@ yaml_lines.extend([
     "    lazy: true",
     "    proxies:"
 ] + [f"      - '{name}'" for name in underlying_names] + [
+    "",
+    "  # 【专属套娃组】给 ChatGPT、Gemini 等 AI 专属定制，解决风控",
+    "  - name: 🤖 人工智能",
+    "    type: select",
+    "    proxies:",
+    "      - 🤖 人工智能套娃", # 默认自动选优的套娃
+    "      - ⚡ 亚洲线路",
+    "      - 🗽 美洲线路",
+    "      - 🌍 欧洲线路",
+    "      - ⚡ WARP极速优选",
+    "",
+    "  - name: 🤖 人工智能套娃",
+    "    type: url-test",
+    "    url: http://www.gstatic.com/generate_204",
+    "    interval: 300",
+    "    tolerance: 50",
+    "    lazy: true",
+    "    proxies:",
+    "      - ⚡ 亚洲线路",
+    "      - 🗽 美洲线路",
+    "      - 🌍 欧洲线路",
     "",
     "  - name: ⚡ 亚洲线路",
     "    type: url-test",
@@ -216,15 +207,6 @@ yaml_lines.extend([
     "    proxies:"
 ] + [f"      - '{name}'" for name in region_groups["亚洲"]] + [
     "",
-    "  - name: 🌍 欧洲线路",
-    "    type: url-test",
-    "    url: http://www.gstatic.com/generate_204",
-    "    interval: 300",
-    "    tolerance: 50",
-    "    lazy: true",
-    "    proxies:"
-] + [f"      - '{name}'" for name in region_groups["欧洲"]] + [
-    "",
     "  - name: 🗽 美洲线路",
     "    type: url-test",
     "    url: http://www.gstatic.com/generate_204",
@@ -234,6 +216,21 @@ yaml_lines.extend([
     "    proxies:"
 ] + [f"      - '{name}'" for name in region_groups["美洲"]] + [
     "",
+    "  - name: 🌍 欧洲线路",
+    "    type: url-test",
+    "    url: http://www.gstatic.com/generate_204",
+    "    interval: 300",
+    "    tolerance: 50",
+    "    lazy: true",
+    "    proxies:"
+] + [f"      - '{name}'" for name in region_groups["欧洲"]] + [
+    "",
+    "  - name: 📺 国际媒体",
+    "    type: select",
+    "    proxies:",
+    "      - ⚡ WARP极速优选",
+    "      - 🚀 默认代理",
+    "",
     "  - name: 🛑 广告拦截",
     "    type: select",
     "    proxies:",
@@ -242,27 +239,54 @@ yaml_lines.extend([
     ""
 ])
 
-# 7. 分流规则
+# 7. 全场景高精分流规则（精准捕获 ChatGPT 和 Gemini）
 yaml_lines.extend([
     "rules:",
     "  - GEOIP,private,DIRECT,no-resolve",
     "  - GEOIP,lan,DIRECT,no-resolve",
+    "",
+    "  # 1. 规避 BT/P2P 下载被限速或封号",
     "  - PROCESS-NAME,qbittorrent.exe,DIRECT",
     "  - PROCESS-NAME,Thunder.exe,DIRECT",
     "  - DST-PORT,6881-6889,DIRECT",
     "  - DST-PORT,123,DIRECT",
     "  - DST-PORT,53,DIRECT",
+    "",
+    "  # 2. 广告拦截",
     "  - GEOSITE,category-ads-all,🛑 广告拦截",
+    "",
+    "  # 3. 【重点】精准给 ChatGPT、Gemini、Claude 分流走套娃组！",
+    "  # OpenAI / ChatGPT 域名",
     "  - GEOSITE,openai,🤖 人工智能",
+    "  - DOMAIN-SUFFIX,chatgpt.com,🤖 人工智能",
+    "  - DOMAIN-SUFFIX,oaistatic.com,🤖 人工智能",
+    "  - DOMAIN-SUFFIX,oaiusercontent.com,🤖 人工智能",
+    "",
+    "  # Google Gemini 专属域名",
+    "  - DOMAIN-SUFFIX,gemini.google.com,🤖 人工智能",
+    "  - DOMAIN-SUFFIX,generativelanguage.googleapis.com,🤖 人工智能",
+    "  - DOMAIN-KEYWORD,gemini,🤖 人工智能",
+    "  - DOMAIN-KEYWORD,bard,🤖 人工智能",
+    "",
+    "  # Claude 域名",
     "  - GEOSITE,anthropic,🤖 人工智能",
+    "  - DOMAIN-SUFFIX,claude.ai,🤖 人工智能",
+    "",
+    "  # 4. 常见流媒体与普通境外网站（走纯 WARP 大带宽直连）",
     "  - GEOSITE,youtube,📺 国际媒体",
     "  - GEOSITE,netflix,📺 国际媒体",
+    "  - GEOSITE,spotify,📺 国际媒体",
+    "",
+    "  # 5. 国内域名与 IP 直连",
     "  - GEOSITE,cn,DIRECT",
     "  - GEOIP,CN,DIRECT",
+    "",
+    "  # 6. 兜底（所有普通境外流量走极速纯 WARP）",
     "  - MATCH,🚀 默认代理"
 ])
 
 with open(OUTPUT_PATH, "w", encoding="utf-8") as f:
     f.write("\n".join(yaml_lines))
 
-print(f"[OK] 成功融合套娃架构！已生成完整聚合订阅至: {OUTPUT_PATH}")
+print(f"[OK] 成功应用高精分流：普通流量走纯 WARP 极速直连，仅 AI 服务走 Opera 套娃！")
+print(f"[OK] 文件已更新至: {OUTPUT_PATH}")
